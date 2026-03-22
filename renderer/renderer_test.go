@@ -40,7 +40,7 @@ func TestRender_HandlesEmptyStringWithoutError(t *testing.T) {
 	}
 }
 
-func TestStripLinePadding_末尾パディングを除去し背景色付き空白を保持する(t *testing.T) {
+func TestStripLinePadding_StripsTrailingPaddingButPreservesBackgroundColoredSpaces(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -123,7 +123,7 @@ func TestRender_PreservesFrontmatterAsIs(t *testing.T) {
 	}
 }
 
-func TestRender_ANSIスタイルが各行末でリセットされている(t *testing.T) {
+func TestRender_ANSIStyleIsResetAtEndOfEachLine(t *testing.T) {
 	input := "# Heading\n\nSome text with `inline code` here.\n\nText ending `code`\n"
 	result, err := Render(input, Options{NoColor: false})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestRender_ANSIスタイルが各行末でリセットされている(t *te
 	}
 }
 
-func TestRender_行末インラインコードの背景色パディングが保持される(t *testing.T) {
+func TestRender_PreservesInlineCodeBackgroundPaddingAtEndOfLine(t *testing.T) {
 	input := "Text ending `code`\n"
 	result, err := Render(input, Options{NoColor: false})
 	if err != nil {

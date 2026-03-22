@@ -58,6 +58,30 @@ func TestFormat_HeaderContainsYAMLFrontmatterAndBody(t *testing.T) {
 	}
 }
 
+func TestFormat_EscapesDoubleQuotesInTitleAndAuthor(t *testing.T) {
+	pr := basePR()
+	pr.Title = `Fix "broken" test`
+	pr.Author = ghapi.User{Login: `user"name`}
+	result := Format(pr, Options{})
+
+	if !strings.Contains(result, `title: "Fix \"broken\" test"`) {
+		t.Errorf("expected escaped title in frontmatter, got:\n%s", result)
+	}
+	if !strings.Contains(result, `author: "user\"name"`) {
+		t.Errorf("expected escaped author in frontmatter, got:\n%s", result)
+	}
+}
+
+func TestFormat_EscapesBackslashesInTitle(t *testing.T) {
+	pr := basePR()
+	pr.Title = `Fix path\to\file`
+	result := Format(pr, Options{})
+
+	if !strings.Contains(result, `title: "Fix path\\to\\file"`) {
+		t.Errorf("expected escaped backslashes in frontmatter, got:\n%s", result)
+	}
+}
+
 func TestFormat_HandlesEmptyBodyWithoutError(t *testing.T) {
 	pr := basePR()
 	pr.Body = ""

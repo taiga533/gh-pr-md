@@ -3,6 +3,7 @@ package ghapi
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -176,6 +177,195 @@ func TestFetchPR_CollectsAllCommentsViaPagination(t *testing.T) {
 	}
 	if pr.Comments[1].Body != "comment 2" {
 		t.Errorf("expected second comment 'comment 2', got '%s'", pr.Comments[1].Body)
+	}
+}
+
+func TestFetchPR_DoesNotDuplicateReviewsWhenOnlyCommentsPaginate(t *testing.T) {
+	firstPage := `{
+		"repository": {
+			"pullRequest": {
+				"number": 1,
+				"title": "Test PR",
+				"body": "",
+				"author": {"login": "alice"},
+				"assignees": {"nodes": []},
+				"comments": {
+					"pageInfo": {"hasNextPage": true, "endCursor": "cursor1"},
+					"nodes": [
+						{"author": {"login": "user1"}, "body": "comment 1", "createdAt": "2024-01-01T00:00:00Z"}
+					]
+				},
+				"reviews": {
+					"pageInfo": {"hasNextPage": false, "endCursor": ""},
+					"nodes": [
+						{
+							"author": {"login": "reviewer1"},
+							"body": "LGTM",
+							"state": "APPROVED",
+							"submittedAt": "2024-01-01T01:00:00Z",
+							"comments": {"nodes": []}
+						}
+					]
+				}
+			}
+		}
+	}`
+
+	secondPage := `{
+		"repository": {
+			"pullRequest": {
+				"number": 1,
+				"title": "Test PR",
+				"body": "",
+				"author": {"login": "alice"},
+				"assignees": {"nodes": []},
+				"comments": {
+					"pageInfo": {"hasNextPage": false, "endCursor": ""},
+					"nodes": [
+						{"author": {"login": "user2"}, "body": "comment 2", "createdAt": "2024-01-02T00:00:00Z"}
+					]
+				},
+				"reviews": {
+					"pageInfo": {"hasNextPage": false, "endCursor": ""},
+					"nodes": [
+						{
+							"author": {"login": "reviewer1"},
+							"body": "LGTM",
+							"state": "APPROVED",
+							"submittedAt": "2024-01-01T01:00:00Z",
+							"comments": {"nodes": []}
+						}
+					]
+				}
+			}
+		}
+	}`
+
+	mock := &mockGraphQLClient{responses: []string{firstPage, secondPage}}
+	client := NewClientWithGraphQL(mock)
+
+	pr, err := client.FetchPR("owner", "repo", 1)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if len(pr.Comments) != 2 {
+		t.Errorf("expected 2 comments, got %d", len(pr.Comments))
+	}
+	if len(pr.Reviews) != 1 {
+		t.Errorf("expected 1 review (no duplicates), got %d", len(pr.Reviews))
+	}
+}
+
+func TestFetchPR_DoesNotDuplicateCommentsWhenOnlyReviewsPaginate(t *testing.T) {
+	firstPage := `{
+		"repository": {
+			"pullRequest": {
+				"number": 1,
+				"title": "Test PR",
+				"body": "",
+				"author": {"login": "alice"},
+				"assignees": {"nodes": []},
+				"comments": {
+					"pageInfo": {"hasNextPage": false, "endCursor": ""},
+					"nodes": [
+						{"author": {"login": "user1"}, "body": "comment 1", "createdAt": "2024-01-01T00:00:00Z"}
+					]
+				},
+				"reviews": {
+					"pageInfo": {"hasNextPage": true, "endCursor": "rcursor1"},
+					"nodes": [
+						{
+							"author": {"login": "reviewer1"},
+							"body": "Review 1",
+							"state": "COMMENTED",
+							"submittedAt": "2024-01-01T01:00:00Z",
+							"comments": {"nodes": []}
+						}
+					]
+				}
+			}
+		}
+	}`
+
+	secondPage := `{
+		"repository": {
+			"pullRequest": {
+				"number": 1,
+				"title": "Test PR",
+				"body": "",
+				"author": {"login": "alice"},
+				"assignees": {"nodes": []},
+				"comments": {
+					"pageInfo": {"hasNextPage": false, "endCursor": ""},
+					"nodes": [
+						{"author": {"login": "user1"}, "body": "comment 1", "createdAt": "2024-01-01T00:00:00Z"}
+					]
+				},
+				"reviews": {
+					"pageInfo": {"hasNextPage": false, "endCursor": ""},
+					"nodes": [
+						{
+							"author": {"login": "reviewer2"},
+							"body": "Review 2",
+							"state": "APPROVED",
+							"submittedAt": "2024-01-02T01:00:00Z",
+							"comments": {"nodes": []}
+						}
+					]
+				}
+			}
+		}
+	}`
+
+	mock := &mockGraphQLClient{responses: []string{firstPage, secondPage}}
+	client := NewClientWithGraphQL(mock)
+
+	pr, err := client.FetchPR("owner", "repo", 1)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if len(pr.Comments) != 1 {
+		t.Errorf("expected 1 comment (no duplicates), got %d", len(pr.Comments))
+	}
+	if len(pr.Reviews) != 2 {
+		t.Errorf("expected 2 reviews, got %d", len(pr.Reviews))
+	}
+}
+
+func TestFetchPR_ReturnsErrorOnInvalidTimestamp(t *testing.T) {
+	mockResp := `{
+		"repository": {
+			"pullRequest": {
+				"number": 1,
+				"title": "Test",
+				"body": "",
+				"author": {"login": "alice"},
+				"assignees": {"nodes": []},
+				"comments": {
+					"pageInfo": {"hasNextPage": false, "endCursor": ""},
+					"nodes": [
+						{"author": {"login": "user1"}, "body": "comment", "createdAt": "not-a-date"}
+					]
+				},
+				"reviews": {
+					"pageInfo": {"hasNextPage": false, "endCursor": ""},
+					"nodes": []
+				}
+			}
+		}
+	}`
+
+	mock := &mockGraphQLClient{responses: []string{mockResp}}
+	client := NewClientWithGraphQL(mock)
+
+	_, err := client.FetchPR("owner", "repo", 1)
+	if err == nil {
+		t.Fatal("expected error for invalid timestamp, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to parse") {
+		t.Errorf("expected parse error message, got: %s", err.Error())
 	}
 }
 

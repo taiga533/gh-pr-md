@@ -35,17 +35,24 @@ func Format(pr *ghapi.PRData, opts Options) string {
 	return sb.String()
 }
 
+// escapeYAMLString escapes special characters in a YAML double-quoted string value.
+func escapeYAMLString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
 // writeHeader writes the PR metadata as YAML frontmatter, followed by the body.
 func writeHeader(sb *strings.Builder, pr *ghapi.PRData) {
 	sb.WriteString("---\n")
 	fmt.Fprintf(sb, "number: %d\n", pr.Number)
-	fmt.Fprintf(sb, "title: \"%s\"\n", pr.Title)
-	fmt.Fprintf(sb, "author: \"%s\"\n", pr.Author.Login)
+	fmt.Fprintf(sb, "title: \"%s\"\n", escapeYAMLString(pr.Title))
+	fmt.Fprintf(sb, "author: \"%s\"\n", escapeYAMLString(pr.Author.Login))
 
 	if len(pr.Assignees) > 0 {
 		sb.WriteString("assignees:\n")
 		for _, a := range pr.Assignees {
-			fmt.Fprintf(sb, "  - \"%s\"\n", a.Login)
+			fmt.Fprintf(sb, "  - \"%s\"\n", escapeYAMLString(a.Login))
 		}
 	}
 

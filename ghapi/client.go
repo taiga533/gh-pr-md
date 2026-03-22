@@ -153,6 +153,8 @@ func (c *ghClient) FetchPR(owner, repo string, number int) (*PRData, error) {
 	pr := &PRData{}
 	var commentsCursor *string
 	var reviewsCursor *string
+	commentsDone := false
+	reviewsDone := false
 
 	for {
 		variables := map[string]interface{}{
@@ -185,62 +187,77 @@ func (c *ghClient) FetchPR(owner, repo string, number int) (*PRData, error) {
 			}
 		}
 
-		// Collect comments
-		for _, c := range prData.Comments.Nodes {
-			createdAt, _ := time.Parse(time.RFC3339, c.CreatedAt)
-			pr.Comments = append(pr.Comments, IssueComment{
-				Author:    User{Login: c.Author.Login},
-				Body:      c.Body,
-				CreatedAt: createdAt,
-			})
-		}
-
-		// Collect reviews
-		for _, r := range prData.Reviews.Nodes {
-			submittedAt, _ := time.Parse(time.RFC3339, r.SubmittedAt)
-			review := Review{
-				Author:      User{Login: r.Author.Login},
-				Body:        r.Body,
-				State:       r.State,
-				SubmittedAt: submittedAt,
-			}
-			for _, rc := range r.Comments.Nodes {
-				createdAt, _ := time.Parse(time.RFC3339, rc.CreatedAt)
-				var replyToID string
-				if rc.ReplyTo != nil {
-					replyToID = rc.ReplyTo.ID
+		// Collect comments only if not yet fully paginated.
+		if !commentsDone {
+			for _, c := range prData.Comments.Nodes {
+				createdAt, err := time.Parse(time.RFC3339, c.CreatedAt)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse comment timestamp %q: %w", c.CreatedAt, err)
 				}
-				review.Comments = append(review.Comments, ReviewComment{
-					ID:                rc.ID,
-					ReplyToID:         replyToID,
-					Author:            User{Login: rc.Author.Login},
-					Body:              rc.Body,
-					Path:              rc.Path,
-					DiffHunk:          rc.DiffHunk,
-					CreatedAt:         createdAt,
-					CommitHash:        rc.Commit.OID,
-					OriginalLine:      rc.OriginalLine,
-					OriginalStartLine: rc.OriginalStartLine,
+				pr.Comments = append(pr.Comments, IssueComment{
+					Author:    User{Login: c.Author.Login},
+					Body:      c.Body,
+					CreatedAt: createdAt,
 				})
 			}
-			pr.Reviews = append(pr.Reviews, review)
 		}
 
-		// Check pagination
-		commentsHasNext := prData.Comments.PageInfo.HasNextPage
-		reviewsHasNext := prData.Reviews.PageInfo.HasNextPage
-
-		if !commentsHasNext && !reviewsHasNext {
-			break
+		// Collect reviews only if not yet fully paginated.
+		if !reviewsDone {
+			for _, r := range prData.Reviews.Nodes {
+				submittedAt, err := time.Parse(time.RFC3339, r.SubmittedAt)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse review timestamp %q: %w", r.SubmittedAt, err)
+				}
+				review := Review{
+					Author:      User{Login: r.Author.Login},
+					Body:        r.Body,
+					State:       r.State,
+					SubmittedAt: submittedAt,
+				}
+				for _, rc := range r.Comments.Nodes {
+					createdAt, err := time.Parse(time.RFC3339, rc.CreatedAt)
+					if err != nil {
+						return nil, fmt.Errorf("failed to parse review comment timestamp %q: %w", rc.CreatedAt, err)
+					}
+					var replyToID string
+					if rc.ReplyTo != nil {
+						replyToID = rc.ReplyTo.ID
+					}
+					review.Comments = append(review.Comments, ReviewComment{
+						ID:                rc.ID,
+						ReplyToID:         replyToID,
+						Author:            User{Login: rc.Author.Login},
+						Body:              rc.Body,
+						Path:              rc.Path,
+						DiffHunk:          rc.DiffHunk,
+						CreatedAt:         createdAt,
+						CommitHash:        rc.Commit.OID,
+						OriginalLine:      rc.OriginalLine,
+						OriginalStartLine: rc.OriginalStartLine,
+					})
+				}
+				pr.Reviews = append(pr.Reviews, review)
+			}
 		}
 
-		if commentsHasNext {
+		// Check pagination and mark completed resources.
+		if !prData.Comments.PageInfo.HasNextPage {
+			commentsDone = true
+		} else {
 			cursor := prData.Comments.PageInfo.EndCursor
 			commentsCursor = &cursor
 		}
-		if reviewsHasNext {
+
+		if !prData.Reviews.PageInfo.HasNextPage {
+			reviewsDone = true
+		} else {
 			cursor := prData.Reviews.PageInfo.EndCursor
 			reviewsCursor = &cursor
+		}
+
+		if commentsDone && reviewsDone {
+			break
 		}
 	}
 
