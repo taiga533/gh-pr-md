@@ -80,7 +80,10 @@ func writeTimeline(sb *strings.Builder, pr *ghapi.PRData, opts Options) {
 	}
 
 	// Add review headers (without inline comments).
-	for _, r := range pr.Reviews {
+	// Deduplicate empty-body reviews from the same author with the same state,
+	// keeping only the latest one to avoid noisy repeated "reviewed" lines.
+	dedupedReviews := deduplicateReviewHeaders(pr.Reviews)
+	for _, r := range dedupedReviews {
 		entries = append(entries, timelineEntry{
 			timestamp: r.SubmittedAt,
 			content:   formatReviewHeader(r),
@@ -124,6 +127,37 @@ func formatIssueComment(c ghapi.IssueComment) string {
 		sb.WriteString("\n\n")
 	}
 	return sb.String()
+}
+
+// deduplicateReviewHeaders removes redundant empty-body reviews from the same
+// author with the same state, keeping only the latest occurrence. Reviews with
+// a non-empty body are always kept.
+func deduplicateReviewHeaders(reviews []ghapi.Review) []ghapi.Review {
+	type key struct {
+		author string
+		state  string
+	}
+	// Track the latest empty-body review per author+state.
+	latest := make(map[key]int)
+	for i, r := range reviews {
+		if r.Body == "" {
+			k := key{author: r.Author.Login, state: r.State}
+			latest[k] = i
+		}
+	}
+
+	var result []ghapi.Review
+	for i, r := range reviews {
+		if r.Body != "" {
+			result = append(result, r)
+			continue
+		}
+		k := key{author: r.Author.Login, state: r.State}
+		if latest[k] == i {
+			result = append(result, r)
+		}
+	}
+	return result
 }
 
 // formatReviewHeader formats only the review header (state and body) without

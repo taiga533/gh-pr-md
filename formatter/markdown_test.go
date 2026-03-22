@@ -727,6 +727,72 @@ func TestTrimDiffHunk_ExpandsToIncludeAdjacentDeletionLines(t *testing.T) {
 	}
 }
 
+func TestFormat_DeduplicatesEmptyBodyReviewsFromSameAuthorAndState(t *testing.T) {
+	pr := basePR()
+	pr.Reviews = []ghapi.Review{
+		{Author: ghapi.User{Login: "alice"}, State: "COMMENTED", SubmittedAt: newTime("2024-01-15T10:00:00Z")},
+		{Author: ghapi.User{Login: "alice"}, State: "COMMENTED", SubmittedAt: newTime("2024-01-15T10:05:00Z")},
+		{Author: ghapi.User{Login: "alice"}, State: "COMMENTED", SubmittedAt: newTime("2024-01-15T10:10:00Z")},
+	}
+
+	result := Format(pr, Options{})
+
+	reviewedCount := strings.Count(result, "reviewed")
+	if reviewedCount != 1 {
+		t.Errorf("expected 1 'reviewed' entry after dedup, got %d\n%s", reviewedCount, result)
+	}
+	// Should keep the latest timestamp.
+	if !strings.Contains(result, "2024-01-15 10:10") {
+		t.Error("expected latest review timestamp to be kept")
+	}
+}
+
+func TestFormat_KeepsReviewsWithBodyEvenIfSameAuthorAndState(t *testing.T) {
+	pr := basePR()
+	pr.Reviews = []ghapi.Review{
+		{Author: ghapi.User{Login: "alice"}, State: "COMMENTED", Body: "First review body", SubmittedAt: newTime("2024-01-15T10:00:00Z")},
+		{Author: ghapi.User{Login: "alice"}, State: "COMMENTED", SubmittedAt: newTime("2024-01-15T10:05:00Z")},
+		{Author: ghapi.User{Login: "alice"}, State: "COMMENTED", Body: "Second review body", SubmittedAt: newTime("2024-01-15T10:10:00Z")},
+	}
+
+	result := Format(pr, Options{})
+
+	if !strings.Contains(result, "First review body") {
+		t.Error("expected first review with body to be kept")
+	}
+	if !strings.Contains(result, "Second review body") {
+		t.Error("expected second review with body to be kept")
+	}
+	// 2 reviews with body + 1 deduped empty-body review = 3 "reviewed" entries
+	reviewedCount := strings.Count(result, "reviewed")
+	if reviewedCount != 3 {
+		t.Errorf("expected 3 'reviewed' entries, got %d\n%s", reviewedCount, result)
+	}
+}
+
+func TestFormat_DeduplicatesPerAuthorAndStateIndependently(t *testing.T) {
+	pr := basePR()
+	pr.Reviews = []ghapi.Review{
+		{Author: ghapi.User{Login: "alice"}, State: "COMMENTED", SubmittedAt: newTime("2024-01-15T10:00:00Z")},
+		{Author: ghapi.User{Login: "alice"}, State: "COMMENTED", SubmittedAt: newTime("2024-01-15T10:05:00Z")},
+		{Author: ghapi.User{Login: "bob"}, State: "COMMENTED", SubmittedAt: newTime("2024-01-15T10:02:00Z")},
+		{Author: ghapi.User{Login: "alice"}, State: "APPROVED", SubmittedAt: newTime("2024-01-15T10:10:00Z")},
+	}
+
+	result := Format(pr, Options{})
+
+	// alice COMMENTED deduped to 1, bob COMMENTED kept as 1, alice APPROVED kept as 1 = 3 headers
+	if !strings.Contains(result, "@alice") {
+		t.Error("expected alice in output")
+	}
+	if !strings.Contains(result, "@bob") {
+		t.Error("expected bob in output")
+	}
+	if !strings.Contains(result, "approved") {
+		t.Error("expected alice's APPROVED review in output")
+	}
+}
+
 func TestFormat_OutputsOnlyFrontmatterAndBodyWhenNoCommentsOrReviews(t *testing.T) {
 	pr := basePR()
 	result := Format(pr, Options{})
