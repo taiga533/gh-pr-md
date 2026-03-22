@@ -36,6 +36,8 @@ type Review struct {
 
 // ReviewComment represents an inline comment on a pull request diff.
 type ReviewComment struct {
+	ID                string
+	ReplyToID         string
 	Author            User
 	Body              string
 	Path              string

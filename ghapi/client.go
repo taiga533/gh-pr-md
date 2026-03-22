@@ -65,6 +65,8 @@ query($owner: String!, $repo: String!, $number: Int!, $commentsCursor: String, $
           submittedAt
           comments(first: 100) {
             nodes {
+              id
+              replyTo { id }
               author { login }
               body
               path
@@ -117,14 +119,18 @@ type graphQLResponse struct {
 					SubmittedAt string `json:"submittedAt"`
 					Comments    struct {
 						Nodes []struct {
+							ID      string `json:"id"`
+							ReplyTo *struct {
+								ID string `json:"id"`
+							} `json:"replyTo"`
 							Author struct {
 								Login string `json:"login"`
 							} `json:"author"`
-							Body     string `json:"body"`
-							Path     string `json:"path"`
-							DiffHunk string `json:"diffHunk"`
-							CreatedAt string `json:"createdAt"`
-							Commit   struct {
+							Body              string `json:"body"`
+							Path              string `json:"path"`
+							DiffHunk          string `json:"diffHunk"`
+							CreatedAt         string `json:"createdAt"`
+							Commit            struct {
 								OID string `json:"oid"`
 							} `json:"commit"`
 							OriginalLine      int `json:"originalLine"`
@@ -200,7 +206,13 @@ func (c *ghClient) FetchPR(owner, repo string, number int) (*PRData, error) {
 			}
 			for _, rc := range r.Comments.Nodes {
 				createdAt, _ := time.Parse(time.RFC3339, rc.CreatedAt)
+				var replyToID string
+				if rc.ReplyTo != nil {
+					replyToID = rc.ReplyTo.ID
+				}
 				review.Comments = append(review.Comments, ReviewComment{
+					ID:                rc.ID,
+					ReplyToID:         replyToID,
 					Author:            User{Login: rc.Author.Login},
 					Body:              rc.Body,
 					Path:              rc.Path,

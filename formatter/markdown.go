@@ -57,12 +57,14 @@ func writeHeader(sb *strings.Builder, pr *ghapi.PRData) {
 	}
 }
 
-// writeTimeline collects all comments and reviews, sorts them chronologically,
-// and writes them to the markdown output.
+// writeTimeline collects all comments, review headers, and review comment
+// threads, sorts them chronologically, and writes them to the markdown output.
+// Review comments are grouped into threads across all reviews and sorted by
+// parent comment date ASC, then by reply date ASC within each thread.
 func writeTimeline(sb *strings.Builder, pr *ghapi.PRData, opts Options) {
 	var entries []timelineEntry
 
-	// Add issue comments
+	// Add issue comments.
 	for _, c := range pr.Comments {
 		entries = append(entries, timelineEntry{
 			timestamp: c.CreatedAt,
@@ -70,15 +72,32 @@ func writeTimeline(sb *strings.Builder, pr *ghapi.PRData, opts Options) {
 		})
 	}
 
-	// Add reviews (with their inline comments)
+	// Add review headers (without inline comments).
 	for _, r := range pr.Reviews {
 		entries = append(entries, timelineEntry{
 			timestamp: r.SubmittedAt,
-			content:   formatReview(r, opts),
+			content:   formatReviewHeader(r),
 		})
 	}
 
-	// Sort chronologically
+	// Collect all review comments across all reviews, group by thread,
+	// and add each thread as a timeline entry.
+	var allComments []ghapi.ReviewComment
+	for _, r := range pr.Reviews {
+		allComments = append(allComments, r.Comments...)
+	}
+	for _, thread := range groupByThread(allComments) {
+		var content strings.Builder
+		for _, rc := range thread.comments {
+			content.WriteString(formatReviewComment(rc, opts))
+		}
+		entries = append(entries, timelineEntry{
+			timestamp: thread.rootTime,
+			content:   content.String(),
+		})
+	}
+
+	// Sort chronologically.
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].timestamp.Before(entries[j].timestamp)
 	})
@@ -100,8 +119,9 @@ func formatIssueComment(c ghapi.IssueComment) string {
 	return sb.String()
 }
 
-// formatReview formats a review and its inline comments as markdown.
-func formatReview(r ghapi.Review, opts Options) string {
+// formatReviewHeader formats only the review header (state and body) without
+// inline comments. Inline comments are handled separately as threaded entries.
+func formatReviewHeader(r ghapi.Review) string {
 	var sb strings.Builder
 
 	sb.WriteString("---\n\n")
@@ -113,11 +133,92 @@ func formatReview(r ghapi.Review, opts Options) string {
 		sb.WriteString("\n\n")
 	}
 
-	for _, rc := range r.Comments {
-		sb.WriteString(formatReviewComment(rc, opts))
+	return sb.String()
+}
+
+// commentThread represents a group of review comments in the same thread.
+type commentThread struct {
+	rootTime time.Time
+	comments []ghapi.ReviewComment
+}
+
+// groupByThread groups review comments from all reviews into threads.
+// Threads are sorted by root comment creation time ASC, and comments within
+// each thread are sorted by creation time ASC.
+func groupByThread(comments []ghapi.ReviewComment) []commentThread {
+	if len(comments) == 0 {
+		return nil
 	}
 
-	return sb.String()
+	// Build a map of comment ID to comment for root resolution.
+	byID := make(map[string]*ghapi.ReviewComment, len(comments))
+	for i := range comments {
+		if comments[i].ID != "" {
+			byID[comments[i].ID] = &comments[i]
+		}
+	}
+
+	// Group comments by thread root ID.
+	threadMap := make(map[string]*commentThread)
+	var threadOrder []string
+
+	for _, c := range comments {
+		rootID := resolveRootID(c, byID)
+
+		th, exists := threadMap[rootID]
+		if !exists {
+			th = &commentThread{}
+			threadMap[rootID] = th
+			threadOrder = append(threadOrder, rootID)
+
+			// Use root comment's CreatedAt if available, otherwise use this
+			// comment's CreatedAt as a proxy for thread ordering.
+			if root, ok := byID[rootID]; ok {
+				th.rootTime = root.CreatedAt
+			} else {
+				th.rootTime = c.CreatedAt
+			}
+		}
+		th.comments = append(th.comments, c)
+	}
+
+	// Sort threads by root time.
+	sort.Slice(threadOrder, func(i, j int) bool {
+		return threadMap[threadOrder[i]].rootTime.Before(threadMap[threadOrder[j]].rootTime)
+	})
+
+	// Build result: within each thread, sort replies by creation time.
+	result := make([]commentThread, 0, len(threadOrder))
+	for _, rootID := range threadOrder {
+		th := threadMap[rootID]
+		sort.Slice(th.comments, func(i, j int) bool {
+			return th.comments[i].CreatedAt.Before(th.comments[j].CreatedAt)
+		})
+		result = append(result, *th)
+	}
+
+	return result
+}
+
+// resolveRootID walks up the ReplyToID chain to find the thread root ID.
+func resolveRootID(c ghapi.ReviewComment, byID map[string]*ghapi.ReviewComment) string {
+	current := c
+	visited := make(map[string]bool)
+	for current.ReplyToID != "" {
+		if visited[current.ReplyToID] {
+			break
+		}
+		visited[current.ReplyToID] = true
+		parent, ok := byID[current.ReplyToID]
+		if !ok {
+			return current.ReplyToID
+		}
+		current = *parent
+	}
+	if current.ID != "" {
+		return current.ID
+	}
+	return c.ID
 }
 
 // formatReviewComment formats an inline review comment as markdown.
@@ -126,10 +227,12 @@ func formatReviewComment(rc ghapi.ReviewComment, opts Options) string {
 
 	fmt.Fprintf(&sb, "**@%s** commented on `%s`\n\n", rc.Author.Login, rc.Path)
 
-	if opts.NoDiff {
+	// Only show diff hunk or file reference for thread root comments.
+	// Replies inherit the same DiffHunk from the API, which is redundant.
+	if rc.ReplyToID == "" && opts.NoDiff {
 		sb.WriteString(formatFileReference(rc))
 		sb.WriteString("\n\n")
-	} else if rc.DiffHunk != "" {
+	} else if rc.ReplyToID == "" && rc.DiffHunk != "" {
 		sb.WriteString("```diff\n")
 		sb.WriteString(trimDiffHunk(rc.DiffHunk, rc.OriginalStartLine, rc.OriginalLine))
 		sb.WriteString("\n```\n\n")

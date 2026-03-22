@@ -138,6 +138,96 @@ func TestFormat_IncludesDiffHunkInReviewComments(t *testing.T) {
 	}
 }
 
+func TestFormat_ReplyCommentsOmitDiffHunk(t *testing.T) {
+	pr := basePR()
+	pr.Reviews = []ghapi.Review{
+		{
+			Author: ghapi.User{Login: "reviewer"}, State: "COMMENTED",
+			SubmittedAt: newTime("2024-01-15T10:00:00Z"),
+			Comments: []ghapi.ReviewComment{
+				{
+					ID:                "root-1",
+					Author:            ghapi.User{Login: "reviewer"},
+					Body:              "Root comment",
+					Path:              "main.go",
+					DiffHunk:          "@@ -1,3 +1,5 @@\n+func hello() {}",
+					CreatedAt:         newTime("2024-01-15T10:00:00Z"),
+					CommitHash:        "abc123def456",
+					OriginalLine:      5,
+					OriginalStartLine: 1,
+				},
+				{
+					ID:                "reply-1",
+					ReplyToID:         "root-1",
+					Author:            ghapi.User{Login: "other"},
+					Body:              "Reply body",
+					Path:              "main.go",
+					DiffHunk:          "@@ -1,3 +1,5 @@\n+func hello() {}",
+					CreatedAt:         newTime("2024-01-15T11:00:00Z"),
+					CommitHash:        "abc123def456",
+					OriginalLine:      5,
+					OriginalStartLine: 1,
+				},
+			},
+		},
+	}
+
+	result := Format(pr, Options{})
+
+	// Diff block should appear exactly once (for the root comment only).
+	diffCount := strings.Count(result, "```diff")
+	if diffCount != 1 {
+		t.Errorf("expected exactly 1 diff block, got %d\n%s", diffCount, result)
+	}
+	if !strings.Contains(result, "Reply body") {
+		t.Error("expected reply body in output")
+	}
+}
+
+func TestFormat_ReplyCommentsOmitFileReferenceInNoDiffMode(t *testing.T) {
+	pr := basePR()
+	pr.Reviews = []ghapi.Review{
+		{
+			Author: ghapi.User{Login: "reviewer"}, State: "COMMENTED",
+			SubmittedAt: newTime("2024-01-15T10:00:00Z"),
+			Comments: []ghapi.ReviewComment{
+				{
+					ID:                "root-1",
+					Author:            ghapi.User{Login: "reviewer"},
+					Body:              "Root comment",
+					Path:              "src/main.go",
+					CreatedAt:         newTime("2024-01-15T10:00:00Z"),
+					CommitHash:        "abc123def456",
+					OriginalLine:      20,
+					OriginalStartLine: 15,
+				},
+				{
+					ID:                "reply-1",
+					ReplyToID:         "root-1",
+					Author:            ghapi.User{Login: "other"},
+					Body:              "Reply in no-diff",
+					Path:              "src/main.go",
+					CreatedAt:         newTime("2024-01-15T11:00:00Z"),
+					CommitHash:        "abc123def456",
+					OriginalLine:      20,
+					OriginalStartLine: 15,
+				},
+			},
+		},
+	}
+
+	result := Format(pr, Options{NoDiff: true})
+
+	// File reference should appear exactly once (for the root comment only).
+	refCount := strings.Count(result, "abc123d@src/main.go")
+	if refCount != 1 {
+		t.Errorf("expected exactly 1 file reference, got %d\n%s", refCount, result)
+	}
+	if !strings.Contains(result, "Reply in no-diff") {
+		t.Error("expected reply body in output")
+	}
+}
+
 func TestFormat_NoDiffShowsFileReferenceInsteadOfDiff(t *testing.T) {
 	pr := basePR()
 	pr.Reviews = []ghapi.Review{
@@ -273,6 +363,208 @@ func TestFormat_ConvertsMultipleSuggestionBlocks(t *testing.T) {
 	count := strings.Count(result, "**Suggested change:**")
 	if count != 2 {
 		t.Errorf("expected 2 suggestion labels, got %d", count)
+	}
+}
+
+func TestFormat_SortsReviewCommentsByThread(t *testing.T) {
+	pr := basePR()
+	pr.Reviews = []ghapi.Review{
+		{
+			Author: ghapi.User{Login: "reviewer"}, State: "COMMENTED",
+			SubmittedAt: newTime("2024-01-15T10:00:00Z"),
+			Comments: []ghapi.ReviewComment{
+				{
+					ID:        "reply-b1",
+					ReplyToID: "root-b",
+					Author:    ghapi.User{Login: "reviewer"},
+					Body:      "Reply to thread B",
+					Path:      "main.go",
+					CreatedAt: newTime("2024-01-15T12:00:00Z"),
+				},
+				{
+					ID:     "root-a",
+					Author: ghapi.User{Login: "reviewer"},
+					Body:   "Thread A root (earliest)",
+					Path:   "main.go",
+					CreatedAt: newTime("2024-01-15T09:00:00Z"),
+				},
+				{
+					ID:     "root-b",
+					Author: ghapi.User{Login: "reviewer"},
+					Body:   "Thread B root",
+					Path:   "main.go",
+					CreatedAt: newTime("2024-01-15T11:00:00Z"),
+				},
+			},
+		},
+	}
+
+	result := Format(pr, Options{})
+
+	rootAIdx := strings.Index(result, "Thread A root (earliest)")
+	rootBIdx := strings.Index(result, "Thread B root")
+	replyBIdx := strings.Index(result, "Reply to thread B")
+
+	if rootAIdx == -1 || rootBIdx == -1 || replyBIdx == -1 {
+		t.Fatal("expected all three comments in output")
+	}
+	if !(rootAIdx < rootBIdx) {
+		t.Error("expected Thread A root before Thread B root (earlier parent)")
+	}
+	if !(rootBIdx < replyBIdx) {
+		t.Error("expected Thread B root before its reply")
+	}
+}
+
+func TestFormat_SortsRepliesWithinThreadByCreationTime(t *testing.T) {
+	pr := basePR()
+	pr.Reviews = []ghapi.Review{
+		{
+			Author: ghapi.User{Login: "reviewer"}, State: "COMMENTED",
+			SubmittedAt: newTime("2024-01-15T10:00:00Z"),
+			Comments: []ghapi.ReviewComment{
+				{
+					ID:        "reply-2",
+					ReplyToID: "root-1",
+					Author:    ghapi.User{Login: "reviewer"},
+					Body:      "Second reply",
+					Path:      "main.go",
+					CreatedAt: newTime("2024-01-15T13:00:00Z"),
+				},
+				{
+					ID:        "reply-1",
+					ReplyToID: "root-1",
+					Author:    ghapi.User{Login: "reviewer"},
+					Body:      "First reply",
+					Path:      "main.go",
+					CreatedAt: newTime("2024-01-15T12:00:00Z"),
+				},
+				{
+					ID:     "root-1",
+					Author: ghapi.User{Login: "reviewer"},
+					Body:   "Root comment",
+					Path:   "main.go",
+					CreatedAt: newTime("2024-01-15T10:00:00Z"),
+				},
+			},
+		},
+	}
+
+	result := Format(pr, Options{})
+
+	rootIdx := strings.Index(result, "Root comment")
+	reply1Idx := strings.Index(result, "First reply")
+	reply2Idx := strings.Index(result, "Second reply")
+
+	if rootIdx == -1 || reply1Idx == -1 || reply2Idx == -1 {
+		t.Fatal("expected all three comments in output")
+	}
+	if !(rootIdx < reply1Idx && reply1Idx < reply2Idx) {
+		t.Error("expected root < first reply < second reply")
+	}
+}
+
+func TestFormat_ThreadSortHandlesReplyToExternalParent(t *testing.T) {
+	pr := basePR()
+	// reply-ext references a parent not in this review's comments
+	pr.Reviews = []ghapi.Review{
+		{
+			Author: ghapi.User{Login: "reviewer"}, State: "COMMENTED",
+			SubmittedAt: newTime("2024-01-15T10:00:00Z"),
+			Comments: []ghapi.ReviewComment{
+				{
+					ID:     "local-root",
+					Author: ghapi.User{Login: "reviewer"},
+					Body:   "Local root",
+					Path:   "main.go",
+					CreatedAt: newTime("2024-01-15T11:00:00Z"),
+				},
+				{
+					ID:        "reply-ext",
+					ReplyToID: "external-parent",
+					Author:    ghapi.User{Login: "reviewer"},
+					Body:      "Reply to external",
+					Path:      "main.go",
+					CreatedAt: newTime("2024-01-15T09:00:00Z"),
+				},
+			},
+		},
+	}
+
+	result := Format(pr, Options{})
+
+	extIdx := strings.Index(result, "Reply to external")
+	localIdx := strings.Index(result, "Local root")
+
+	if extIdx == -1 || localIdx == -1 {
+		t.Fatal("expected both comments in output")
+	}
+	// reply-ext has CreatedAt 09:00 (used as proxy for its external parent),
+	// local-root has CreatedAt 11:00, so external thread should come first.
+	if !(extIdx < localIdx) {
+		t.Error("expected external reply thread before local root (earlier proxy time)")
+	}
+}
+
+func TestFormat_GroupsThreadCommentsAcrossReviews(t *testing.T) {
+	pr := basePR()
+	// Review A has the root comment of thread-1.
+	// Review B has a reply to thread-1 and a new root for thread-2.
+	// Expected output order: thread-1 root (09:00) -> thread-1 reply (12:00) -> thread-2 root (11:00)
+	pr.Reviews = []ghapi.Review{
+		{
+			Author: ghapi.User{Login: "alice"}, State: "COMMENTED",
+			SubmittedAt: newTime("2024-01-15T09:00:00Z"),
+			Comments: []ghapi.ReviewComment{
+				{
+					ID:        "thread1-root",
+					Author:    ghapi.User{Login: "alice"},
+					Body:      "Thread 1 root from Review A",
+					Path:      "main.go",
+					CreatedAt: newTime("2024-01-15T09:00:00Z"),
+				},
+			},
+		},
+		{
+			Author: ghapi.User{Login: "bob"}, State: "COMMENTED",
+			SubmittedAt: newTime("2024-01-15T11:00:00Z"),
+			Comments: []ghapi.ReviewComment{
+				{
+					ID:     "thread2-root",
+					Author: ghapi.User{Login: "bob"},
+					Body:   "Thread 2 root from Review B",
+					Path:   "util.go",
+					CreatedAt: newTime("2024-01-15T11:00:00Z"),
+				},
+				{
+					ID:        "thread1-reply",
+					ReplyToID: "thread1-root",
+					Author:    ghapi.User{Login: "bob"},
+					Body:      "Thread 1 reply from Review B",
+					Path:      "main.go",
+					CreatedAt: newTime("2024-01-15T12:00:00Z"),
+				},
+			},
+		},
+	}
+
+	result := Format(pr, Options{})
+
+	rootIdx := strings.Index(result, "Thread 1 root from Review A")
+	replyIdx := strings.Index(result, "Thread 1 reply from Review B")
+	thread2Idx := strings.Index(result, "Thread 2 root from Review B")
+
+	if rootIdx == -1 || replyIdx == -1 || thread2Idx == -1 {
+		t.Fatalf("expected all three comments in output, got:\n%s", result)
+	}
+	// Thread 1 (root at 09:00) should appear before thread 2 (root at 11:00).
+	if !(rootIdx < thread2Idx) {
+		t.Error("expected thread 1 root before thread 2 root (earlier parent)")
+	}
+	// Thread 1 reply should appear right after thread 1 root (same thread),
+	// even though it came from a different review.
+	if !(rootIdx < replyIdx && replyIdx < thread2Idx) {
+		t.Error("expected thread 1 reply grouped with thread 1 root, before thread 2")
 	}
 }
 
