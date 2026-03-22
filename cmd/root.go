@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/taiga533/gh-pr-md/formatter"
 	"github.com/taiga533/gh-pr-md/ghapi"
 	"github.com/taiga533/gh-pr-md/renderer"
 	"github.com/taiga533/gh-pr-md/resolver"
+	"golang.org/x/term"
 )
 
 // Options holds the CLI flags for the pr-md command.
@@ -71,6 +73,12 @@ func run(args []string) error {
 	md := formatter.Format(pr, formatter.Options{
 		NoDiff: opts.NoDiff,
 	})
+
+	// If stdout is not a TTY (piped or redirected), output plain markdown
+	if !term.IsTerminal(int(os.Stdout.Fd())) && !opts.NoColor {
+		fmt.Print(md)
+		return nil
+	}
 
 	// Render to terminal
 	rendered, err := renderer.Render(md, renderer.Options{

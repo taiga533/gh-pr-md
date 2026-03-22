@@ -93,7 +93,10 @@ func loadFixturePR(t *testing.T) *ghapi.PRData {
 	}
 
 	for _, c := range prJSON.Comments.Nodes {
-		createdAt, _ := time.Parse(time.RFC3339, c.CreatedAt)
+		createdAt, err := time.Parse(time.RFC3339, c.CreatedAt)
+		if err != nil {
+			t.Fatalf("failed to parse comment timestamp %q: %v", c.CreatedAt, err)
+		}
 		pr.Comments = append(pr.Comments, ghapi.IssueComment{
 			Author:    ghapi.User{Login: c.Author.Login},
 			Body:      c.Body,
@@ -102,7 +105,10 @@ func loadFixturePR(t *testing.T) *ghapi.PRData {
 	}
 
 	for _, r := range prJSON.Reviews.Nodes {
-		submittedAt, _ := time.Parse(time.RFC3339, r.SubmittedAt)
+		submittedAt, err := time.Parse(time.RFC3339, r.SubmittedAt)
+		if err != nil {
+			t.Fatalf("failed to parse review timestamp %q: %v", r.SubmittedAt, err)
+		}
 		review := ghapi.Review{
 			Author:      ghapi.User{Login: r.Author.Login},
 			Body:        r.Body,
@@ -110,7 +116,10 @@ func loadFixturePR(t *testing.T) *ghapi.PRData {
 			SubmittedAt: submittedAt,
 		}
 		for _, rc := range r.Comments.Nodes {
-			createdAt, _ := time.Parse(time.RFC3339, rc.CreatedAt)
+			createdAt, err := time.Parse(time.RFC3339, rc.CreatedAt)
+			if err != nil {
+				t.Fatalf("failed to parse review comment timestamp %q: %v", rc.CreatedAt, err)
+			}
 			review.Comments = append(review.Comments, ghapi.ReviewComment{
 				Author:            ghapi.User{Login: rc.Author.Login},
 				Body:              rc.Body,
@@ -132,8 +141,8 @@ func TestIntegration_PR12655_OutputContainsPRMetadata(t *testing.T) {
 	pr := loadFixturePR(t)
 	md := formatter.Format(pr, formatter.Options{})
 
-	if !strings.Contains(md, "# #12655") {
-		t.Error("expected PR number in title")
+	if !strings.Contains(md, "number: 12655") {
+		t.Error("expected PR number in frontmatter")
 	}
 	if !strings.Contains(md, "--exclude") {
 		t.Error("expected --exclude flag keyword from title")
@@ -148,10 +157,10 @@ func TestIntegration_PR12655_IncludesIssueComments(t *testing.T) {
 	md := formatter.Format(pr, formatter.Options{})
 
 	// PR has 5 issue comments from yuvrajangadsingh and BagToad
-	if strings.Count(md, "@yuvrajangadsingh commented on") < 1 {
+	if strings.Count(md, "**@yuvrajangadsingh** commented on") < 1 {
 		t.Error("expected issue comments from yuvrajangadsingh")
 	}
-	if !strings.Contains(md, "@BagToad commented on") {
+	if !strings.Contains(md, "**@BagToad** commented on") {
 		t.Error("expected issue comment from BagToad")
 	}
 }
@@ -193,10 +202,13 @@ func TestIntegration_PR12655_DisplaysSuggestedChangeWithLabel(t *testing.T) {
 	if !strings.Contains(md, "diffHeaderRegexp") {
 		t.Error("expected suggestion code content")
 	}
-	// Raw ```suggestion fence should be converted
-	if strings.Contains(md, "```suggestion\nvar") {
-		// After conversion, there should be a label before the code block
-		// The pattern "```suggestion\nvar" without preceding label means it wasn't converted
+	// Every ```suggestion block should be preceded by the "Suggested change" label
+	suggestIdx := strings.Index(md, "```suggestion\n")
+	if suggestIdx > 0 {
+		preceding := md[:suggestIdx]
+		if !strings.HasSuffix(preceding, "**Suggested change:**\n") {
+			t.Error("expected ```suggestion block to be preceded by 'Suggested change' label")
+		}
 	}
 }
 
@@ -251,7 +263,7 @@ func TestIntegration_PR12655_SortsCommentsAndReviewsChronologically(t *testing.T
 	// BagToad's CHANGES_REQUESTED review (2026-02-20) should come before
 	// BagToad's issue comment (2026-03-04)
 	changesIdx := strings.Index(md, "requested changes")
-	bagToadCommentIdx := strings.Index(md, "@BagToad commented on")
+	bagToadCommentIdx := strings.Index(md, "**@BagToad** commented on")
 
 	if changesIdx == -1 || bagToadCommentIdx == -1 {
 		t.Fatal("expected both BagToad's review and comment in output")
@@ -261,8 +273,8 @@ func TestIntegration_PR12655_SortsCommentsAndReviewsChronologically(t *testing.T
 	}
 
 	// babakks' APPROVED review (2026-03-14) should come after all issue comments
-	lastCommentIdx := strings.LastIndex(md, "commented on 2026-03-06")
-	approvedIdx := strings.Index(md, "@babakks approved")
+	lastCommentIdx := strings.LastIndex(md, "commented on **2026-03-06")
+	approvedIdx := strings.Index(md, "**@babakks** approved")
 	if lastCommentIdx == -1 || approvedIdx == -1 {
 		t.Fatal("expected both last comment and babakks approval in output")
 	}

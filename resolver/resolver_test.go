@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -15,14 +16,8 @@ func (m *mockPRFinder) FindPRByBranch(owner, repo, branch string) (int, error) {
 }
 
 func TestResolve_WithPRNumber(t *testing.T) {
-	// Override currentBranch to avoid git dependency
-	origCurrentBranch := currentBranch
-	defer func() { currentBranch = origCurrentBranch }()
-
 	finder := &mockPRFinder{prNumber: 42}
 
-	// We need to override resolveRepo since we're not in a real git repo
-	// Instead, use a repo flag
 	result, err := Resolve("123", "owner/repo", finder)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -95,6 +90,24 @@ func TestResolve_AutoDetectsFromCurrentBranch(t *testing.T) {
 	}
 	if result.PRNumber != 77 {
 		t.Errorf("expected PR number 77, got %d", result.PRNumber)
+	}
+}
+
+func TestResolve_ReturnsErrorOnDetachedHEAD(t *testing.T) {
+	origCurrentBranch := currentBranch
+	defer func() { currentBranch = origCurrentBranch }()
+	currentBranch = func() (string, error) {
+		return "", fmt.Errorf("not on a branch (detached HEAD state)")
+	}
+
+	finder := &mockPRFinder{prNumber: 77}
+
+	_, err := Resolve("", "owner/repo", finder)
+	if err == nil {
+		t.Fatal("expected error for detached HEAD, got nil")
+	}
+	if !strings.Contains(err.Error(), "detached HEAD") {
+		t.Errorf("expected detached HEAD error message, got: %v", err)
 	}
 }
 

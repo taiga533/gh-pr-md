@@ -27,21 +27,34 @@ func basePR() *ghapi.PRData {
 	}
 }
 
-func TestFormat_HeaderContainsTitleBodyAndAssignees(t *testing.T) {
+func TestFormat_HeaderContainsYAMLFrontmatterAndBody(t *testing.T) {
 	pr := basePR()
 	result := Format(pr, Options{})
 
-	if !strings.Contains(result, "# #42 Add feature X") {
-		t.Error("expected title in header")
+	if !strings.Contains(result, "number: 42") {
+		t.Error("expected number in frontmatter")
+	}
+	if !strings.Contains(result, `title: "Add feature X"`) {
+		t.Error("expected title in frontmatter")
+	}
+	if !strings.Contains(result, `author: "alice"`) {
+		t.Error("expected author in frontmatter")
+	}
+	if !strings.Contains(result, `- "bob"`) {
+		t.Error("expected assignee bob in frontmatter")
+	}
+	if !strings.Contains(result, `- "charlie"`) {
+		t.Error("expected assignee charlie in frontmatter")
 	}
 	if !strings.Contains(result, "This PR adds feature X.") {
 		t.Error("expected body in output")
 	}
-	if !strings.Contains(result, "@bob") {
-		t.Error("expected assignee @bob")
+	// Verify frontmatter delimiters
+	if !strings.HasPrefix(result, "---\n") {
+		t.Error("expected frontmatter to start with ---")
 	}
-	if !strings.Contains(result, "@charlie") {
-		t.Error("expected assignee @charlie")
+	if strings.Count(result, "---\n") < 2 {
+		t.Error("expected closing frontmatter delimiter")
 	}
 }
 
@@ -50,18 +63,18 @@ func TestFormat_HandlesEmptyBodyWithoutError(t *testing.T) {
 	pr.Body = ""
 	result := Format(pr, Options{})
 
-	if !strings.Contains(result, "# #42 Add feature X") {
-		t.Error("expected title even with empty body")
+	if !strings.Contains(result, `title: "Add feature X"`) {
+		t.Error("expected title in frontmatter even with empty body")
 	}
 }
 
-func TestFormat_OmitsAssigneesSectionWhenEmpty(t *testing.T) {
+func TestFormat_OmitsAssigneesInFrontmatterWhenEmpty(t *testing.T) {
 	pr := basePR()
 	pr.Assignees = nil
 	result := Format(pr, Options{})
 
-	if strings.Contains(result, "Assignees") {
-		t.Error("expected no Assignees section when no assignees")
+	if strings.Contains(result, "assignees") {
+		t.Error("expected no assignees field in frontmatter when no assignees")
 	}
 }
 
@@ -398,15 +411,17 @@ func TestTrimDiffHunk_ExpandsToIncludeAdjacentDeletionLines(t *testing.T) {
 	}
 }
 
-func TestFormat_OutputsOnlyHeaderWhenNoCommentsOrReviews(t *testing.T) {
+func TestFormat_OutputsOnlyFrontmatterAndBodyWhenNoCommentsOrReviews(t *testing.T) {
 	pr := basePR()
 	result := Format(pr, Options{})
 
-	if !strings.Contains(result, "# #42 Add feature X") {
-		t.Error("expected header in output")
+	if !strings.Contains(result, "number: 42") {
+		t.Error("expected frontmatter in output")
 	}
-	// Should not crash or produce unexpected output
-	if strings.Count(result, "###") > 0 {
-		t.Error("expected no comment sections")
+	// Should not contain any bold comment metadata
+	// The frontmatter uses **bold** for nothing, and no comment sections should exist
+	boldCount := strings.Count(result, "**")
+	if boldCount > 0 {
+		t.Error("expected no bold comment metadata sections")
 	}
 }

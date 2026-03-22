@@ -35,25 +35,26 @@ func Format(pr *ghapi.PRData, opts Options) string {
 	return sb.String()
 }
 
-// writeHeader writes the PR title, body, and assignees section.
+// writeHeader writes the PR metadata as YAML frontmatter, followed by the body.
 func writeHeader(sb *strings.Builder, pr *ghapi.PRData) {
-	fmt.Fprintf(sb, "# #%d %s\n\n", pr.Number, pr.Title)
-	fmt.Fprintf(sb, "**Author:** @%s\n\n", pr.Author.Login)
+	sb.WriteString("---\n")
+	fmt.Fprintf(sb, "number: %d\n", pr.Number)
+	fmt.Fprintf(sb, "title: \"%s\"\n", pr.Title)
+	fmt.Fprintf(sb, "author: \"%s\"\n", pr.Author.Login)
+
+	if len(pr.Assignees) > 0 {
+		sb.WriteString("assignees:\n")
+		for _, a := range pr.Assignees {
+			fmt.Fprintf(sb, "  - \"%s\"\n", a.Login)
+		}
+	}
+
+	sb.WriteString("---\n\n")
 
 	if pr.Body != "" {
 		sb.WriteString(pr.Body)
 		sb.WriteString("\n\n")
 	}
-
-	if len(pr.Assignees) > 0 {
-		logins := make([]string, len(pr.Assignees))
-		for i, a := range pr.Assignees {
-			logins[i] = "@" + a.Login
-		}
-		fmt.Fprintf(sb, "**Assignees:** %s\n\n", strings.Join(logins, ", "))
-	}
-
-	sb.WriteString("---\n\n")
 }
 
 // writeTimeline collects all comments and reviews, sorts them chronologically,
@@ -90,7 +91,8 @@ func writeTimeline(sb *strings.Builder, pr *ghapi.PRData, opts Options) {
 // formatIssueComment formats a general PR comment as markdown.
 func formatIssueComment(c ghapi.IssueComment) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "### @%s commented on %s\n\n", c.Author.Login, formatTime(c.CreatedAt))
+	sb.WriteString("---\n\n")
+	fmt.Fprintf(&sb, "**@%s** commented on **%s**\n\n", c.Author.Login, formatTime(c.CreatedAt))
 	if c.Body != "" {
 		sb.WriteString(c.Body)
 		sb.WriteString("\n\n")
@@ -102,8 +104,9 @@ func formatIssueComment(c ghapi.IssueComment) string {
 func formatReview(r ghapi.Review, opts Options) string {
 	var sb strings.Builder
 
+	sb.WriteString("---\n\n")
 	stateLabel := formatReviewState(r.State)
-	fmt.Fprintf(&sb, "### @%s %s on %s\n\n", r.Author.Login, stateLabel, formatTime(r.SubmittedAt))
+	fmt.Fprintf(&sb, "**@%s** %s on **%s**\n\n", r.Author.Login, stateLabel, formatTime(r.SubmittedAt))
 
 	if r.Body != "" {
 		sb.WriteString(r.Body)
@@ -121,7 +124,7 @@ func formatReview(r ghapi.Review, opts Options) string {
 func formatReviewComment(rc ghapi.ReviewComment, opts Options) string {
 	var sb strings.Builder
 
-	fmt.Fprintf(&sb, "#### @%s commented on `%s`\n\n", rc.Author.Login, rc.Path)
+	fmt.Fprintf(&sb, "**@%s** commented on `%s`\n\n", rc.Author.Login, rc.Path)
 
 	if opts.NoDiff {
 		sb.WriteString(formatFileReference(rc))

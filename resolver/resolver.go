@@ -123,10 +123,15 @@ func resolveRepo(repoFlag string) (*RepoInfo, error) {
 }
 
 // currentBranch returns the name of the current git branch.
+// Returns an error if the repository is in detached HEAD state.
 var currentBranch = func() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	branch := strings.TrimSpace(string(out))
+	if branch == "HEAD" {
+		return "", fmt.Errorf("not on a branch (detached HEAD state)")
+	}
+	return branch, nil
 }
